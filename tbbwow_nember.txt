@@ -1,0 +1,1199 @@
+-- [[ HAMSTER SCRIPT V8.9.4 - MODERN REMASTERED UI ]] --
+
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer -- Đã thêm định nghĩa LocalPlayer để fix lỗi
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local TeleportService = game:GetService("TeleportService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+
+-- Fix lỗi crash dòng đầu bằng pcall
+pcall(function()
+    local args = {[1] = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")}
+    ReplicatedStorage.RemoteEvents.SomeDeath:FireServer(unpack(args))
+end)
+
+-- Clean GUI & Platform cũ
+if CoreGui:FindFirstChild("HamsterScriptV8") then CoreGui.HamsterScriptV8:Destroy() end
+for _, v in pairs(workspace:GetChildren()) do if v.Name == "FlyPlatform_Hamster" then v:Destroy() end end
+
+local SG = Instance.new("ScreenGui", CoreGui)
+SG.Name = "HamsterScriptV8"
+SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+-- ==========================================
+-- CẤU HÌNH & BIẾN TOÀN CỤC
+-- ==========================================
+local KEY_AUTH = "hamster"
+local KEY_LINK = "https://hamster.com"
+local TARGET_POS = Vector3.new(-0.2, 3.0, 61.4)
+
+local AutoplayEnabled = false
+local AutoAttackEnabled = true 
+local FlyModeEnabled = false 
+local FlyAimEnabled = false 
+local ESPEnabled = false
+local AutoSpawnFireEnabled = false
+local TPWalkEnabled = false
+local JumpPowerEnabled = false
+
+local TPWalkValue = 1.0
+local JumpPowerValue = 10.0 
+local ActiveMode = 1 
+local ForwardDistance = 0.0
+local HitboxSize = Vector3.new(12, 12, 12) 
+local AttackSpeed = 0.1
+local DetectRange = 500 
+
+local CapturedArgs = nil
+local CapturedRemote = nil
+local CapturedUnitName = "Trống"
+local CapturedUnitsList = {} -- Danh sách lưu Unit đã bắt
+
+local FlyYLevel = 0 
+local FlyMoveSpeed = 1.5
+local TriangleIndex = 1
+local LastTriangleTick = 0
+
+local monsterSpawnTimes = {} 
+local originalData = {}
+local CurrentValidMonsters = {}
+local originalCameraMode = LP.DevCameraOcclusionMode
+local IsResetting = false 
+
+-- ==========================================
+-- UI BUILDER HELPER (BỘ CÔNG CỤ TẠO GIAO DIỆN)
+-- ==========================================
+local UI = {}
+
+function UI.Notification(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 4
+        })
+    end)
+end
+
+function UI.AddCorner(parent, radius)
+    local corner = Instance.new("UICorner", parent)
+    corner.CornerRadius = UDim.new(0, radius or 8)
+    return corner
+end
+
+function UI.AddStroke(parent, color, thickness)
+    local stroke = Instance.new("UIStroke", parent)
+    stroke.Color = color or Color3.fromRGB(60, 60, 70)
+    stroke.Thickness = thickness or 1
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    return stroke
+end
+
+function UI.CreateText(parent, pos, sz, text, sizeFont, color, font)
+    local lbl = Instance.new("TextLabel", parent)
+    lbl.BackgroundTransparency = 1
+    lbl.Position = pos
+    lbl.Size = sz
+    lbl.Text = text
+    lbl.Font = font or Enum.Font.GothamBold
+    lbl.TextSize = sizeFont or 12
+    lbl.TextColor3 = color or Color3.fromRGB(240, 240, 240)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    return lbl
+end
+
+function UI.CreateBtn(parent, pos, sz, text, bg, colorText, sizeFont)
+    local btn = Instance.new("TextButton", parent)
+    btn.Position = pos
+    btn.Size = sz
+    btn.Text = text
+    btn.BackgroundColor3 = bg or Color3.fromRGB(35, 35, 45)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = sizeFont or 12
+    btn.TextColor3 = colorText or Color3.fromRGB(255, 255, 255)
+    btn.AutoButtonColor = true
+    UI.AddCorner(btn, 6)
+    return btn
+end
+
+function UI.CreateScrollingFrame(parent, sz, vis)
+    local sf = Instance.new("ScrollingFrame", parent)
+    sf.BackgroundTransparency = 1
+    sf.Size = sz
+    sf.Visible = vis
+    sf.ScrollBarThickness = 3
+    sf.ScrollBarImageColor3 = Color3.fromRGB(0, 170, 255)
+    sf.ScrollingDirection = Enum.ScrollingDirection.Y
+    sf.CanvasSize = UDim2.new(0, 0, 0, 0)
+    return sf
+end
+
+function UI.SetupAutoScroll(sf, layout, padding)
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        sf.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + (padding or 15))
+    end)
+end
+
+local function applyLayout(parent)
+    local layout = Instance.new("UIListLayout", parent)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 8)
+    return layout
+end
+
+-- ==========================================
+-- KEY MENU (GIAO DIỆN KÍCH HOẠT KEY)
+-- ==========================================
+local KF = Instance.new("Frame", SG)
+KF.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+KF.Position = UDim2.new(0.5, -130, 0.5, -80)
+KF.Size = UDim2.new(0, 260, 0, 160)
+KF.Active = true
+KF.Draggable = true
+KF.ClipsDescendants = true
+UI.AddCorner(KF, 10)
+UI.AddStroke(KF, Color3.fromRGB(0, 170, 255), 1.5)
+
+UI.CreateText(KF, UDim2.new(0, 15, 0, 12), UDim2.new(0, 180, 0, 20), "🔑 Key System", 14, Color3.fromRGB(0, 170, 255))
+local KC = UI.CreateBtn(KF, UDim2.new(1, -30, 0, 10), UDim2.new(0, 20, 0, 20), "✕", Color3.fromRGB(255, 60, 60), Color3.new(1,1,1), 12)
+
+local KI = Instance.new("TextBox", KF)
+KI.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+KI.Position = UDim2.new(0, 15, 0, 42)
+KI.Size = UDim2.new(0, 230, 0, 35)
+KI.Font = Enum.Font.Gotham
+KI.PlaceholderText = "Nhập Key tại đây..."
+KI.Text = ""
+KI.TextColor3 = Color3.new(1,1,1)
+KI.TextSize = 12
+UI.AddCorner(KI, 6)
+UI.AddStroke(KI, Color3.fromRGB(50, 50, 60), 1)
+
+local CB = UI.CreateBtn(KF, UDim2.new(0, 15, 0, 88), UDim2.new(0, 230, 0, 32), "XÁC NHẬN", Color3.fromRGB(0, 140, 255))
+local GB = UI.CreateBtn(KF, UDim2.new(0, 15, 0, 126), UDim2.new(0, 230, 0, 22), "[ Bấm để Sao Chép Link Key ]", Color3.fromRGB(20, 20, 26), Color3.fromRGB(150, 150, 160), 10)
+
+-- ==========================================
+-- MAIN MENU (MENU CHÍNH)
+-- ==========================================
+local MM = Instance.new("Frame", SG)
+MM.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+MM.Position = UDim2.new(0.5, -220, 0.5, -140)
+MM.Size = UDim2.new(0, 440, 0, 280)
+MM.Visible = false
+MM.ClipsDescendants = true
+UI.AddCorner(MM, 12)
+UI.AddStroke(MM, Color3.fromRGB(45, 45, 60), 1)
+
+UI.CreateText(MM, UDim2.new(0, 15, 0, 12), UDim2.new(0, 200, 0, 25), "HamsterScript V8.9.4", 15, Color3.fromRGB(0, 170, 255))
+local MC = UI.CreateBtn(MM, UDim2.new(1, -35, 0, 12), UDim2.new(0, 22, 0, 22), "✕", Color3.fromRGB(255, 60, 60), Color3.new(1,1,1), 12)
+
+local Divider = Instance.new("Frame", MM)
+Divider.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
+Divider.BorderSizePixel = 0
+Divider.Position = UDim2.new(0, 130, 0, 48)
+Divider.Size = UDim2.new(0, 1, 0, 220)
+
+local TabContainer = Instance.new("Frame", MM)
+TabContainer.BackgroundTransparency = 1
+TabContainer.Position = UDim2.new(0, 10, 0, 48)
+TabContainer.Size = UDim2.new(0, 110, 0, 220)
+
+local ContentContainer = Instance.new("Frame", MM)
+ContentContainer.BackgroundTransparency = 1
+ContentContainer.Position = UDim2.new(0, 140, 0, 48)
+ContentContainer.Size = UDim2.new(0, 290, 0, 220)
+
+local MainContent = UI.CreateScrollingFrame(ContentContainer, UDim2.new(1, 0, 1, 0), true)
+local FarmContent = UI.CreateScrollingFrame(ContentContainer, UDim2.new(1, 0, 1, 0), false)
+local SubContent = UI.CreateScrollingFrame(ContentContainer, UDim2.new(1, 0, 1, 0), false)
+
+UI.SetupAutoScroll(MainContent, applyLayout(MainContent))
+UI.SetupAutoScroll(FarmContent, applyLayout(FarmContent))
+UI.SetupAutoScroll(SubContent, applyLayout(SubContent))
+
+local Tab1 = UI.CreateBtn(TabContainer, UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 32), "Trang Chính", Color3.fromRGB(0, 140, 255))
+local Tab2 = UI.CreateBtn(TabContainer, UDim2.new(0, 0, 0, 38), UDim2.new(1, 0, 0, 32), "Tự Động Farm", Color3.fromRGB(28, 28, 36), Color3.fromRGB(180, 180, 190))
+local Tab3 = UI.CreateBtn(TabContainer, UDim2.new(0, 0, 0, 76), UDim2.new(1, 0, 0, 32), "Tính Năng Phụ", Color3.fromRGB(28, 28, 36), Color3.fromRGB(180, 180, 190))
+
+local function SwitchTab(tabIndex)
+    Tab1.BackgroundColor3 = tabIndex == 1 and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(28, 28, 36)
+    Tab2.BackgroundColor3 = tabIndex == 2 and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(28, 28, 36)
+    Tab3.BackgroundColor3 = tabIndex == 3 and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(28, 28, 36)
+    
+    Tab1.TextColor3 = tabIndex == 1 and Color3.new(1,1,1) or Color3.fromRGB(180, 180, 190)
+    Tab2.TextColor3 = tabIndex == 2 and Color3.new(1,1,1) or Color3.fromRGB(180, 180, 190)
+    Tab3.TextColor3 = tabIndex == 3 and Color3.new(1,1,1) or Color3.fromRGB(180, 180, 190)
+
+    MainContent.Visible = (tabIndex == 1)
+    FarmContent.Visible = (tabIndex == 2)
+    SubContent.Visible = (tabIndex == 3)
+end
+
+Tab1.MouseButton1Click:Connect(function() SwitchTab(1) end)
+Tab2.MouseButton1Click:Connect(function() SwitchTab(2) end)
+Tab3.MouseButton1Click:Connect(function() SwitchTab(3) end)
+
+-- ==========================================
+-- TAB 1: TRANG CHÍNH (MAIN CONTENT)
+-- ==========================================
+local AutoSpawnFireRow = Instance.new("Frame", MainContent)
+AutoSpawnFireRow.BackgroundTransparency = 1
+AutoSpawnFireRow.Size = UDim2.new(1, 0, 0, 48)
+AutoSpawnFireRow.LayoutOrder = 0
+
+local AutoSpawnFireBtn = UI.CreateBtn(AutoSpawnFireRow, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 30), "Auto Spawn Fire: OFF", Color3.fromRGB(180, 40, 50))
+local AutoSpawnFireSub = UI.CreateText(AutoSpawnFireRow, UDim2.new(0, 2, 0, 32), UDim2.new(1, -10, 0, 14), "*Chỉ hoạt động ở chế độ Normal", 8.5, Color3.fromRGB(140, 140, 150), Enum.Font.Gotham)
+AutoSpawnFireSub.TextXAlignment = Enum.TextXAlignment.Left
+
+AutoSpawnFireBtn.MouseButton1Click:Connect(function()
+    AutoSpawnFireEnabled = not AutoSpawnFireEnabled
+    AutoSpawnFireBtn.BackgroundColor3 = AutoSpawnFireEnabled and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 40, 50)
+    AutoSpawnFireBtn.Text = AutoSpawnFireEnabled and "Auto Spawn Fire: ON" or "Auto Spawn Fire: OFF"
+end)
+
+task.spawn(function()
+    while task.wait(0.1) do
+        if AutoSpawnFireEnabled then
+            pcall(function()
+                local fireArgs = {[1] = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")}
+                ReplicatedStorage.RemoteEvents.SomeDeath:FireServer(unpack(fireArgs))
+            end)
+        end
+    end
+end)
+
+local FlyModeRow = Instance.new("Frame", MainContent)
+FlyModeRow.BackgroundTransparency = 1
+FlyModeRow.Size = UDim2.new(1, 0, 0, 32)
+FlyModeRow.LayoutOrder = 1
+
+local FlyModeBtn = UI.CreateBtn(FlyModeRow, UDim2.new(0, 0, 0, 0), UDim2.new(0, 220, 0, 32), "Fly Mode: OFF", Color3.fromRGB(180, 40, 50))
+local FlySettingBtn = UI.CreateBtn(FlyModeRow, UDim2.new(0, 226, 0, 0), UDim2.new(0, 32, 0, 32), "⚙️", Color3.fromRGB(40, 40, 52))
+
+local FlySettingPanel = UI.CreateScrollingFrame(MainContent, UDim2.new(1, -10, 0, 45), false)
+FlySettingPanel.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+FlySettingPanel.LayoutOrder = 2
+UI.AddCorner(FlySettingPanel, 6)
+
+local FlyAimBtn = UI.CreateBtn(FlySettingPanel, UDim2.new(0, 8, 0, 8), UDim2.new(1, -20, 0, 28), "Hỗ Trợ Đánh Fly Mode: TẮT", Color3.fromRGB(180, 40, 50), Color3.new(1,1,1), 11)
+FlyAimBtn.MouseButton1Click:Connect(function()
+    FlyAimEnabled = not FlyAimEnabled
+    FlyAimBtn.BackgroundColor3 = FlyAimEnabled and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(180, 40, 50)
+    FlyAimBtn.Text = FlyAimEnabled and "Hỗ Trợ Đánh Fly Mode: BẬT" or "Hỗ Trợ Đánh Fly Mode: TẮT"
+end)
+FlySettingBtn.MouseButton1Click:Connect(function() FlySettingPanel.Visible = not FlySettingPanel.Visible end)
+
+local ESPBtn = UI.CreateBtn(MainContent, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 32), "ESP: OFF", Color3.fromRGB(180, 40, 50))
+ESPBtn.LayoutOrder = 3
+ESPBtn.MouseButton1Click:Connect(function()
+    ESPEnabled = not ESPEnabled
+    ESPBtn.BackgroundColor3 = ESPEnabled and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 40, 50)
+    ESPBtn.Text = ESPEnabled and "ESP: ON" or "ESP: OFF"
+end)
+
+-- ==========================================
+-- TAB 2: TỰ ĐỘNG FARM (FARM CONTENT)
+-- ==========================================
+local FarmRow = Instance.new("Frame", FarmContent)
+FarmRow.BackgroundTransparency = 1
+FarmRow.Size = UDim2.new(1, 0, 0, 32)
+FarmRow.LayoutOrder = 1
+
+local AutoplayBtn = UI.CreateBtn(FarmRow, UDim2.new(0, 0, 0, 0), UDim2.new(0, 220, 0, 32), "Autoplay: OFF", Color3.fromRGB(180, 40, 50))
+local SettingBtn = UI.CreateBtn(FarmRow, UDim2.new(0, 226, 0, 0), UDim2.new(0, 32, 0, 32), "⚙️", Color3.fromRGB(40, 40, 52))
+
+local SettingPanel = UI.CreateScrollingFrame(FarmContent, UDim2.new(1, -10, 0, 150), false)
+SettingPanel.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+SettingPanel.LayoutOrder = 2
+UI.AddCorner(SettingPanel, 6)
+
+local SettingLayout = applyLayout(SettingPanel)
+UI.SetupAutoScroll(SettingPanel, SettingLayout, 10)
+
+local AutoAttackBtn = UI.CreateBtn(SettingPanel, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 26), "Auto Đánh: BẬT", Color3.fromRGB(0, 140, 255), Color3.new(1,1,1), 11)
+AutoAttackBtn.MouseButton1Click:Connect(function()
+    AutoAttackEnabled = not AutoAttackEnabled
+    AutoAttackBtn.BackgroundColor3 = AutoAttackEnabled and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(180, 40, 50)
+    AutoAttackBtn.Text = AutoAttackEnabled and "Auto Đánh: BẬT" or "Auto Đánh: TẮT"
+end)
+
+local ATSLabel = UI.CreateText(SettingPanel, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 15), "Tốc độ đánh: 0.10s", 11, Color3.fromRGB(200, 200, 210), Enum.Font.Gotham)
+local ATSBar = Instance.new("Frame", SettingPanel)
+ATSBar.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+ATSBar.Size = UDim2.new(1, -10, 0, 6)
+UI.AddCorner(ATSBar, 3)
+
+local ATSFill = Instance.new("Frame", ATSBar)
+ATSFill.BackgroundColor3 = Color3.fromRGB(40, 180, 90)
+ATSFill.Size = UDim2.new(0.05, 0, 1, 0)
+UI.AddCorner(ATSFill, 3)
+
+local ATSButton = Instance.new("TextButton", ATSBar)
+ATSButton.BackgroundColor3 = Color3.new(1,1,1)
+ATSButton.Position = UDim2.new(0.05, -6, 0, -3)
+ATSButton.Size = UDim2.new(0, 12, 0, 12)
+ATSButton.Text = ""
+UI.AddCorner(ATSButton, 6)
+
+local SliderLabel = UI.CreateText(SettingPanel, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 15), "Khoảng cách địch: +0.0 (Mặc định)", 11, Color3.fromRGB(200, 200, 210), Enum.Font.Gotham)
+local SliderBar = Instance.new("Frame", SettingPanel)
+SliderBar.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+SliderBar.Size = UDim2.new(1, -10, 0, 6)
+UI.AddCorner(SliderBar, 3)
+
+local SliderFill = Instance.new("Frame", SliderBar)
+SliderFill.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+SliderFill.Size = UDim2.new(0, 0, 1, 0)
+UI.AddCorner(SliderFill, 3)
+
+local SliderButton = Instance.new("TextButton", SliderBar)
+SliderButton.BackgroundColor3 = Color3.new(1,1,1)
+SliderButton.Position = UDim2.new(0, -6, 0, -3)
+SliderButton.Size = UDim2.new(0, 12, 0, 12)
+SliderButton.Text = ""
+UI.AddCorner(SliderButton, 6)
+
+local ModeBtn1 = UI.CreateBtn(SettingPanel, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 22), "Auto Base", Color3.fromRGB(0, 140, 255), Color3.new(1,1,1), 10)
+local ModeBtn2 = UI.CreateBtn(SettingPanel, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 22), "TP 3 Điểm Quanh NPC (Mỗi 0.5s)", Color3.fromRGB(35, 35, 45), Color3.fromRGB(160, 160, 170), 10)
+local ModeBtn3 = UI.CreateBtn(SettingPanel, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 22), "Đứng Im Tại Chỗ", Color3.fromRGB(35, 35, 45), Color3.fromRGB(160, 160, 170), 10)
+
+local function UpdateModeVisuals()
+    ModeBtn1.BackgroundColor3 = ActiveMode == 1 and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(35, 35, 45)
+    ModeBtn2.BackgroundColor3 = ActiveMode == 2 and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(35, 35, 45)
+    ModeBtn3.BackgroundColor3 = ActiveMode == 3 and Color3.fromRGB(0, 140, 255) or Color3.fromRGB(35, 35, 45)
+end
+
+ModeBtn1.MouseButton1Click:Connect(function() ActiveMode = 1 UpdateModeVisuals() end)
+ModeBtn2.MouseButton1Click:Connect(function() ActiveMode = 2 UpdateModeVisuals() end)
+ModeBtn3.MouseButton1Click:Connect(function() ActiveMode = 3 UpdateModeVisuals() end)
+SettingBtn.MouseButton1Click:Connect(function() SettingPanel.Visible = not SettingPanel.Visible end)
+
+-- ==========================================
+-- TAB 3: TÍNH NĂNG PHỤ (SUB CONTENT / SETTING)
+-- ==========================================
+local TPWalkRow = Instance.new("Frame", SubContent)
+TPWalkRow.BackgroundTransparency = 1
+TPWalkRow.Size = UDim2.new(1, 0, 0, 32)
+TPWalkRow.LayoutOrder = 1
+
+local TPWalkBtn = UI.CreateBtn(TPWalkRow, UDim2.new(0, 0, 0, 0), UDim2.new(0, 220, 0, 32), "TPWalk: OFF", Color3.fromRGB(180, 40, 50))
+local TPWalkSetBtn = UI.CreateBtn(TPWalkRow, UDim2.new(0, 226, 0, 0), UDim2.new(0, 32, 0, 32), "⚙️", Color3.fromRGB(40, 40, 52))
+
+local TPWalkPanel = Instance.new("Frame", SubContent)
+TPWalkPanel.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+TPWalkPanel.Size = UDim2.new(1, -10, 0, 60)
+TPWalkPanel.Visible = false
+TPWalkPanel.LayoutOrder = 2
+UI.AddCorner(TPWalkPanel, 6)
+
+local TPWalkLabel = UI.CreateText(TPWalkPanel, UDim2.new(0, 10, 0, 6), UDim2.new(1, -20, 0, 15), "Tốc độ dịch chuyển: 1.0 stud", 11, Color3.new(1,1,1), Enum.Font.Gotham)
+local TPWalkBar = Instance.new("Frame", TPWalkPanel)
+TPWalkBar.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+TPWalkBar.Position = UDim2.new(0, 10, 0, 26)
+TPWalkBar.Size = UDim2.new(1, -20, 0, 6)
+UI.AddCorner(TPWalkBar, 3)
+
+local TPWalkFill = Instance.new("Frame", TPWalkBar)
+TPWalkFill.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
+TPWalkFill.Size = UDim2.new(0.09, 0, 1, 0)
+UI.AddCorner(TPWalkFill, 3)
+
+local TPWalkSliderBtn = Instance.new("TextButton", TPWalkBar)
+TPWalkSliderBtn.BackgroundColor3 = Color3.new(1,1,1)
+TPWalkSliderBtn.Position = UDim2.new(0.09, -6, 0, -3)
+TPWalkSliderBtn.Size = UDim2.new(0, 12, 0, 12)
+TPWalkSliderBtn.Text = ""
+UI.AddCorner(TPWalkSliderBtn, 6)
+
+UI.CreateText(TPWalkPanel, UDim2.new(0, 10, 0, 42), UDim2.new(1, -20, 0, 14), "*Lưu ý: Dễ bị Mod/Admin phát hiện ở Server thường", 9, Color3.fromRGB(180, 180, 190), Enum.Font.Gotham)
+
+TPWalkBtn.MouseButton1Click:Connect(function()
+    TPWalkEnabled = not TPWalkEnabled
+    TPWalkBtn.BackgroundColor3 = TPWalkEnabled and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 40, 50)
+    TPWalkBtn.Text = TPWalkEnabled and "TPWalk: ON" or "TPWalk: OFF"
+end)
+TPWalkSetBtn.MouseButton1Click:Connect(function() TPWalkPanel.Visible = not TPWalkPanel.Visible end)
+
+local JumpPowerRow = Instance.new("Frame", SubContent)
+JumpPowerRow.BackgroundTransparency = 1
+JumpPowerRow.Size = UDim2.new(1, 0, 0, 32)
+JumpPowerRow.LayoutOrder = 3
+
+local JumpPowerBtn = UI.CreateBtn(JumpPowerRow, UDim2.new(0, 0, 0, 0), UDim2.new(0, 220, 0, 32), "JumpPower TP: OFF", Color3.fromRGB(180, 40, 50))
+local JumpPowerSetBtn = UI.CreateBtn(JumpPowerRow, UDim2.new(0, 226, 0, 0), UDim2.new(0, 32, 0, 32), "⚙️", Color3.fromRGB(40, 40, 52))
+
+local JumpPowerPanel = Instance.new("Frame", SubContent)
+JumpPowerPanel.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+JumpPowerPanel.Size = UDim2.new(1, -10, 0, 60)
+JumpPowerPanel.Visible = false
+JumpPowerPanel.LayoutOrder = 4
+UI.AddCorner(JumpPowerPanel, 6)
+
+local JumpPowerLabel = UI.CreateText(JumpPowerPanel, UDim2.new(0, 10, 0, 6), UDim2.new(1, -20, 0, 15), "Độ cao nhảy: 10 studs", 11, Color3.new(1,1,1), Enum.Font.Gotham)
+local JumpPowerBar = Instance.new("Frame", JumpPowerPanel)
+JumpPowerBar.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+JumpPowerBar.Position = UDim2.new(0, 10, 0, 26)
+JumpPowerBar.Size = UDim2.new(1, -20, 0, 6)
+UI.AddCorner(JumpPowerBar, 3)
+
+local JumpPowerFill = Instance.new("Frame", JumpPowerBar)
+JumpPowerFill.BackgroundColor3 = Color3.fromRGB(180, 0, 255)
+JumpPowerFill.Size = UDim2.new(0.2, 0, 1, 0)
+UI.AddCorner(JumpPowerFill, 3)
+
+local JumpPowerSliderBtn = Instance.new("TextButton", JumpPowerBar)
+JumpPowerSliderBtn.BackgroundColor3 = Color3.new(1,1,1)
+JumpPowerSliderBtn.Position = UDim2.new(0.2, -6, 0, -3)
+JumpPowerSliderBtn.Size = UDim2.new(0, 12, 0, 12)
+JumpPowerSliderBtn.Text = ""
+UI.AddCorner(JumpPowerSliderBtn, 6)
+
+UI.CreateText(JumpPowerPanel, UDim2.new(0, 10, 0, 42), UDim2.new(1, -20, 0, 14), "*Lưu ý: Dễ bị Mod/Admin phát hiện ở Server thường", 9, Color3.fromRGB(180, 180, 190), Enum.Font.Gotham)
+
+JumpPowerBtn.MouseButton1Click:Connect(function()
+    JumpPowerEnabled = not JumpPowerEnabled
+    JumpPowerBtn.BackgroundColor3 = JumpPowerEnabled and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 40, 50)
+    JumpPowerBtn.Text = JumpPowerEnabled and "JumpPower TP: ON" or "JumpPower TP: OFF"
+end)
+JumpPowerSetBtn.MouseButton1Click:Connect(function() JumpPowerPanel.Visible = not JumpPowerPanel.Visible end)
+
+local VipServerRow = Instance.new("Frame", SubContent)
+VipServerRow.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+VipServerRow.Size = UDim2.new(1, -10, 0, 36)
+VipServerRow.LayoutOrder = 5
+UI.AddCorner(VipServerRow, 6)
+
+local VipInput = Instance.new("TextBox", VipServerRow)
+VipInput.BackgroundTransparency = 1
+VipInput.Position = UDim2.new(0, 10, 0, 3)
+VipInput.Size = UDim2.new(0, 160, 0, 30)
+VipInput.Font = Enum.Font.Gotham
+VipInput.Text = ""
+VipInput.TextSize = 11
+VipInput.PlaceholderText = "ID / Link Server VIP..."
+VipInput.PlaceholderColor3 = Color3.fromRGB(140, 140, 150)
+VipInput.TextColor3 = Color3.new(1,1,1)
+VipInput.TextXAlignment = Enum.TextXAlignment.Left
+
+local VipJoinBtn = UI.CreateBtn(VipServerRow, UDim2.new(1, -85, 0, 4), UDim2.new(0, 78, 0, 28), "Vào SVV", Color3.fromRGB(0, 140, 255), Color3.new(1,1,1), 11)
+VipJoinBtn.MouseButton1Click:Connect(function()
+    if VipInput.Text ~= "" then
+        UI.Notification("Teleport", "Đang chuyển hướng tới Server VIP...", 4)
+        task.wait(0.5)
+        pcall(function() TeleportService:JoinPrivateServerLink(VipInput.Text) end)
+    else
+        UI.Notification("Lỗi", "Vui lòng dán link hoặc mã ID Server VIP!", 3)
+    end
+end)
+
+local ResetSpawnRow = Instance.new("Frame", SubContent)
+ResetSpawnRow.BackgroundTransparency = 1
+ResetSpawnRow.Size = UDim2.new(1, 0, 0, 32)
+ResetSpawnRow.LayoutOrder = 6
+
+local ResetSpawnBtn = UI.CreateBtn(ResetSpawnRow, UDim2.new(0, 0, 0, 0), UDim2.new(0, 220, 0, 32), "[Trống]: Gọi Spawn 1 Lần", Color3.fromRGB(40, 40, 50), Color3.fromRGB(160, 160, 170), 11)
+local ResetSpawnSetBtn = UI.CreateBtn(ResetSpawnRow, UDim2.new(0, 226, 0, 0), UDim2.new(0, 32, 0, 32), "⚙️", Color3.fromRGB(40, 40, 52))
+
+local ResetSpawnPanel = Instance.new("Frame", SubContent)
+ResetSpawnPanel.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+ResetSpawnPanel.Size = UDim2.new(1, -10, 0, 85)
+ResetSpawnPanel.Visible = false
+ResetSpawnPanel.LayoutOrder = 7
+UI.AddCorner(ResetSpawnPanel, 6)
+
+local InstantSpawnEnabled = false
+local InstantSpawnBtn = UI.CreateBtn(ResetSpawnPanel, UDim2.new(0, 8, 0, 6), UDim2.new(1, -16, 0, 28), "Auto Resetspawn Tức Thì: OFF", Color3.fromRGB(180, 40, 50), Color3.new(1,1,1), 11)
+UI.CreateText(ResetSpawnPanel, UDim2.new(0, 8, 0, 38), UDim2.new(1, -16, 0, 16), "*Tự động check Workspace.NPC để gọi Spawn", 8.5, Color3.fromRGB(160, 160, 170), Enum.Font.Gotham)
+
+-- [MỚI] Nút Mở Danh Sách Unit và Khu vực Danh sách
+local UnitListBtn = UI.CreateBtn(ResetSpawnPanel, UDim2.new(0, 8, 0, 58), UDim2.new(1, -16, 0, 20), "Danh Sách Unit: ĐÓNG ▼", Color3.fromRGB(35, 35, 45), Color3.new(1,1,1), 10)
+
+local UnitListFrame = UI.CreateScrollingFrame(ResetSpawnPanel, UDim2.new(1, -16, 0, 95), false)
+UnitListFrame.Position = UDim2.new(0, 8, 0, 82)
+UnitListFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+UnitListFrame.BackgroundTransparency = 0
+UI.AddCorner(UnitListFrame, 4)
+
+local UnitListLayout = applyLayout(UnitListFrame)
+UI.SetupAutoScroll(UnitListFrame, UnitListLayout, 5)
+
+local IsListOpen = false
+UnitListBtn.MouseButton1Click:Connect(function()
+    IsListOpen = not IsListOpen
+    if IsListOpen then
+        UnitListBtn.Text = "Danh Sách Unit: MỞ ▲"
+        UnitListFrame.Visible = true
+        ResetSpawnPanel.Size = UDim2.new(1, -10, 0, 185)
+    else
+        UnitListBtn.Text = "Danh Sách Unit: ĐÓNG ▼"
+        UnitListFrame.Visible = false
+        ResetSpawnPanel.Size = UDim2.new(1, -10, 0, 85)
+    end
+end)
+
+local function RefreshUnitListUI()
+    for _, child in pairs(UnitListFrame:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    for _, unitData in ipairs(CapturedUnitsList) do
+        local btn = UI.CreateBtn(UnitListFrame, UDim2.new(0, 0, 0, 0), UDim2.new(1, -10, 0, 22), unitData.Name, Color3.fromRGB(30, 30, 40), Color3.new(1,1,1), 10)
+        
+        -- Highlight màu xanh cho unit đang chọn
+        if unitData.Name == CapturedUnitName then
+            btn.TextColor3 = Color3.fromRGB(40, 255, 90)
+        else
+            btn.TextColor3 = Color3.new(1,1,1)
+        end
+        
+        btn.MouseButton1Click:Connect(function()
+            CapturedUnitName = unitData.Name
+            CapturedArgs = unitData.Args
+            CapturedRemote = unitData.Remote
+            if ResetSpawnBtn then
+                ResetSpawnBtn.Text = "[" .. CapturedUnitName .. "]: Gọi Spawn 1 Lần"
+            end
+            RefreshUnitListUI()
+        end)
+    end
+end
+
+ResetSpawnSetBtn.MouseButton1Click:Connect(function()
+    ResetSpawnPanel.Visible = not ResetSpawnPanel.Visible
+end)
+
+ResetSpawnBtn.MouseButton1Click:Connect(function()
+    if CapturedArgs and CapturedRemote then
+        pcall(function()
+            CapturedRemote:FireServer(unpack(CapturedArgs, 1, CapturedArgs.n))
+            UI.Notification("Auto Spawn", "Đã kích hoạt Gọi Spawn cho " .. CapturedUnitName, 2)
+        end)
+    else
+        UI.Notification("Chưa nhận dữ liệu", "Hãy Spawn nhân vật ít nhất 1 lần để hệ thống bắt gói tin!", 4)
+    end
+end)
+
+InstantSpawnBtn.MouseButton1Click:Connect(function()
+    if not CapturedArgs or not CapturedRemote then
+        UI.Notification("Chưa nhận dữ liệu", "Hãy Spawn nhân vật ít nhất 1 lần trước khi bật Auto!", 4)
+        return
+    end
+    InstantSpawnEnabled = not InstantSpawnEnabled
+    InstantSpawnBtn.BackgroundColor3 = InstantSpawnEnabled and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 40, 50)
+    InstantSpawnBtn.Text = InstantSpawnEnabled and "Auto Resetspawn Tức Thì: ON" or "Auto Resetspawn Tức Thì: OFF"
+end)
+
+task.spawn(function()
+    while task.wait(0.1) do
+        if InstantSpawnEnabled and CapturedArgs and CapturedRemote then
+            pcall(function()
+                local npcFolder = workspace:FindFirstChild("NPC")
+                if npcFolder then
+                    local hasUnit = false
+                    for _, v in pairs(npcFolder:GetChildren()) do
+                        if v.Name == LP.Name then
+                            hasUnit = true
+                            break
+                        end
+                    end
+                    if not hasUnit then
+                        CapturedRemote:FireServer(unpack(CapturedArgs, 1, CapturedArgs.n))
+                        task.wait(0.5) 
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- ==========================================
+-- THANH TRƯỢT SLIDERS CONTROL
+-- ==========================================
+local isDraggingDistance, dragWalk, dragJump, isDraggingATS = false, false, false, false
+SliderButton.MouseButton1Down:Connect(function() isDraggingDistance = true end)
+TPWalkSliderBtn.MouseButton1Down:Connect(function() dragWalk = true end)
+JumpPowerSliderBtn.MouseButton1Down:Connect(function() dragJump = true end)
+ATSButton.MouseButton1Down:Connect(function() isDraggingATS = true end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if isDraggingDistance and SliderBar.AbsoluteSize.X > 0 then
+            local pct = math.clamp((input.Position.X - SliderBar.AbsolutePosition.X) / SliderBar.AbsoluteSize.X, 0, 1)
+            SliderButton.Position = UDim2.new(pct, -6, 0, -3)
+            SliderFill.Size = UDim2.new(pct, 0, 1, 0)
+            ForwardDistance = math.floor((pct * 50) * 10) / 10
+            SliderLabel.Text = ForwardDistance == 0 and "Khoảng cách địch: +0.0 (Mặc định)" or "Khoảng cách địch: +" .. string.format("%.1f", ForwardDistance)
+        elseif isDraggingATS and ATSBar.AbsoluteSize.X > 0 then
+            local pct = math.clamp((input.Position.X - ATSBar.AbsolutePosition.X) / ATSBar.AbsoluteSize.X, 0, 1)
+            ATSButton.Position = UDim2.new(pct, -6, 0, -3)
+            ATSFill.Size = UDim2.new(pct, 0, 1, 0)
+            AttackSpeed = math.floor((0.05 + (pct * 0.95)) * 100) / 100
+            ATSLabel.Text = "Tốc độ đánh: " .. string.format("%.2f", AttackSpeed) .. "s"
+        elseif dragWalk and TPWalkBar.AbsoluteSize.X > 0 then
+            local pct = math.clamp((input.Position.X - TPWalkBar.AbsolutePosition.X) / TPWalkBar.AbsoluteSize.X, 0, 1)
+            TPWalkSliderBtn.Position = UDim2.new(pct, -6, 0, -3)
+            TPWalkFill.Size = UDim2.new(pct, 0, 1, 0)
+            TPWalkValue = math.floor((0.1 + (pct * 9.9)) * 10) / 10
+            TPWalkLabel.Text = "Tốc độ dịch chuyển: " .. string.format("%.1f", TPWalkValue) .. " studs"
+        elseif dragJump and JumpPowerBar.AbsoluteSize.X > 0 then
+            local pct = math.clamp((input.Position.X - JumpPowerBar.AbsolutePosition.X) / JumpPowerBar.AbsoluteSize.X, 0, 1)
+            JumpPowerSliderBtn.Position = UDim2.new(pct, -6, 0, -3)
+            JumpPowerFill.Size = UDim2.new(pct, 0, 1, 0)
+            JumpPowerValue = math.floor((0.1 + (pct * 4.9)) * 10)
+            JumpPowerLabel.Text = "Độ cao nhảy: " .. JumpPowerValue .. " studs"
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isDraggingDistance, dragWalk, dragJump, isDraggingATS = false, false, false, false
+    end
+end)
+
+-- Xử lý Di chuyển & Nhảy
+task.spawn(function()
+    while task.wait(0.2) do
+        if TPWalkEnabled and not IsResetting then
+            pcall(function()
+                local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.Health > 0 and hum.MoveDirection.Magnitude > 0 then
+                    hrp.CFrame = hrp.CFrame + (hum.MoveDirection * TPWalkValue)
+                end
+            end)
+        end
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if JumpPowerEnabled and not IsResetting then
+        pcall(function()
+            local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then task.wait(0.01) hrp.CFrame = hrp.CFrame * CFrame.new(0, JumpPowerValue, 0) end
+        end)
+    end
+end)
+
+-- ==========================================
+-- XỬ LÝ LỌC QUÁI & HIỂN THỊ ESP
+-- ==========================================
+local function isEnemyNPC(obj)
+    if not obj or not obj.Parent then return false end
+    if Players:GetPlayerFromCharacter(obj) then return false end
+    
+    local hum = obj:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    
+    local name = string.lower(obj.Name)
+    local parentName = string.lower(obj.Parent.Name)
+    
+    if string.find(name, "base") or string.find(name, "bank") or string.find(name, "crystal") or string.find(name, "tumore") or string.find(name, "tower") or string.find(name, "spawn") then 
+        return false 
+    end
+    if string.find(parentName, "unit") or string.find(parentName, "player") or string.find(parentName, "tower") then 
+        return false 
+    end
+    
+    return true
+end
+
+task.spawn(function()
+    while task.wait(0.3) do
+        pcall(function()
+            if not ESPEnabled then
+                for _, obj in pairs(workspace:GetDescendants()) do
+                    if obj:FindFirstChild("HamsterESP") then obj.HamsterESP:Destroy() end
+                    if obj:FindFirstChild("HamsterHighlight") then obj.HamsterHighlight:Destroy() end
+                end
+            else
+                local myChar = LP.Character
+                local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                for _, obj in pairs(workspace:GetDescendants()) do
+                    if obj:IsA("Model") and obj ~= myChar and isEnemyNPC(obj) then
+                        local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
+                        if root then
+                            local dist = myRoot and math.floor((root.Position - myRoot.Position).Magnitude) or 0
+                            if dist <= DetectRange then
+                                if not obj:FindFirstChild("HamsterHighlight") then
+                                    local hl = Instance.new("Highlight", obj)
+                                    hl.Name = "HamsterHighlight"
+                                    hl.FillColor = Color3.fromRGB(0, 255, 100)
+                                    hl.FillTransparency = 0.75
+                                    hl.OutlineColor = Color3.fromRGB(0, 255, 0)
+                                end
+                                local bgui = obj:FindFirstChild("HamsterESP") or Instance.new("BillboardGui", obj)
+                                bgui.Name = "HamsterESP"
+                                bgui.AlwaysOnTop = true
+                                bgui.Size = UDim2.new(0, 120, 0, 25)
+                                bgui.StudsOffset = Vector3.new(0, 3, 0)
+                                
+                                local lbl = bgui:FindFirstChildOfClass("TextLabel") or Instance.new("TextLabel", bgui)
+                                lbl.Size = UDim2.new(1, 0, 1, 0)
+                                lbl.BackgroundTransparency = 1
+                                lbl.TextColor3 = Color3.fromRGB(0, 255, 0)
+                                lbl.Font = Enum.Font.GothamBold
+                                lbl.TextSize = 10
+                                lbl.Text = obj.Name .. " [" .. dist .. "m]"
+                            else
+                                if obj:FindFirstChild("HamsterESP") then obj.HamsterESP:Destroy() end
+                                if obj:FindFirstChild("HamsterHighlight") then obj.HamsterHighlight:Destroy() end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+-- ==========================================
+-- BỘ ĐIỀU KHIỂN BAY (FLY MODE)
+-- ==========================================
+local FlyControls = Instance.new("Frame", SG)
+FlyControls.BackgroundTransparency = 1
+FlyControls.Size = UDim2.new(0, 100, 0, 50)
+FlyControls.Position = UDim2.new(0.85, 0, 0.5, 0)
+FlyControls.Visible = false
+FlyControls.Active = true
+FlyControls.Draggable = true
+
+local BtnUp = UI.CreateBtn(FlyControls, UDim2.new(0, 0, 0, 0), UDim2.new(0, 45, 0, 45), "▲", Color3.fromRGB(0, 140, 255), Color3.new(1,1,1), 18)
+local BtnDown = UI.CreateBtn(FlyControls, UDim2.new(0, 50, 0, 0), UDim2.new(0, 45, 0, 45), "▼", Color3.fromRGB(0, 140, 255), Color3.new(1,1,1), 18)
+
+local IsHoldingUp, IsHoldingDown = false, false
+BtnUp.MouseButton1Down:Connect(function() IsHoldingUp = true end) BtnUp.MouseButton1Up:Connect(function() IsHoldingUp = false end) BtnUp.MouseLeave:Connect(function() IsHoldingUp = false end)
+BtnDown.MouseButton1Down:Connect(function() IsHoldingDown = true end) BtnDown.MouseButton1Up:Connect(function() IsHoldingDown = false end) BtnDown.MouseLeave:Connect(function() IsHoldingDown = false end)
+
+local FakePlatform = Instance.new("Part")
+FakePlatform.Size = Vector3.new(4, 0.1, 4)
+FakePlatform.Transparency = 1
+FakePlatform.Name = "FlyPlatform_Hamster"
+FakePlatform.Anchored = true
+FakePlatform.CanCollide = false 
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if FlyModeEnabled then
+            if IsHoldingUp then FlyYLevel = FlyYLevel + FlyMoveSpeed end
+            if IsHoldingDown then FlyYLevel = FlyYLevel - FlyMoveSpeed end
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait() do
+        local char = LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        
+        if FlyModeEnabled and hrp and hum and hum.Health > 0 and not IsResetting then
+            pcall(function()
+                hum.PlatformStand = false
+                hum.JumpPower = 0
+                
+                FakePlatform.Parent = workspace
+                FakePlatform.CFrame = CFrame.new(hrp.Position.X, FlyYLevel - 3.2, hrp.Position.Z)
+                
+                local bp = hrp:FindFirstChild("FlyModeBP") or Instance.new("BodyPosition", hrp)
+                bp.Name = "FlyModeBP"
+                bp.MaxForce = Vector3.new(0, math.huge, 0)
+                bp.Position = Vector3.new(0, FlyYLevel, 0)
+                
+                if AutoplayEnabled then
+                    local bv = hrp:FindFirstChild("FlyModeBV") or Instance.new("BodyVelocity", hrp)
+                    bv.Name = "FlyModeBV"
+                    bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
+                    bv.Velocity = Vector3.new(0,0,0)
+                else
+                    if hrp:FindFirstChild("FlyModeBV") then hrp:FindFirstChild("FlyModeBV"):Destroy() end
+                end
+                
+                if FlyAimEnabled then
+                    local closest, minDist = nil, math.huge
+                    for _, obj in pairs(workspace:GetDescendants()) do
+                        if obj:IsA("Model") and obj ~= char and isEnemyNPC(obj) then
+                            local r = obj:FindFirstChild("HumanoidRootPart")
+                            if r then
+                                local d = (r.Position - hrp.Position).Magnitude
+                                if d < minDist and d <= DetectRange then minDist, closest = d, r end
+                            end
+                        end
+                    end
+                    if closest then hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(closest.Position.X, hrp.Position.Y, closest.Position.Z)) end
+                end
+            end)
+        else
+            if FakePlatform.Parent then FakePlatform.Parent = nil end
+            if hrp then
+                if hrp:FindFirstChild("FlyModeBP") then hrp:FindFirstChild("FlyModeBP"):Destroy() end
+                if hrp:FindFirstChild("FlyModeBV") then hrp:FindFirstChild("FlyModeBV"):Destroy() end
+            end
+            if hum then hum.PlatformStand = false end
+        end
+    end
+end)
+
+FlyModeBtn.MouseButton1Click:Connect(function()
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    
+    if FlyModeEnabled then
+        FlyModeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 50)
+        FlyModeBtn.Text = "Fly Mode: OFF"
+        FlyControls.Visible = false
+        FlyModeEnabled = false
+        if FakePlatform.Parent then FakePlatform.Parent = nil end
+        pcall(function() LP.DevCameraOcclusionMode = originalCameraMode end)
+        if char and char:FindFirstChildOfClass("Humanoid") then char.Humanoid.JumpPower = 50 end
+    else
+        FlyModeEnabled = true
+        FlyModeBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 90)
+        FlyModeBtn.Text = "Fly Mode: ON"
+        FlyControls.Visible = true
+        pcall(function() LP.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam end)
+        
+        if hrp then
+            local startY = hrp.Position.Y
+            FlyYLevel = startY - 5
+            local tweenVal = Instance.new("NumberValue")
+            tweenVal.Value = FlyYLevel
+            local tween = TweenService:Create(tweenVal, TweenInfo.new(1.0, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {Value = startY + 10})
+            
+            tweenVal.Changed:Connect(function(val) FlyYLevel = val end)
+            tween:Play()
+            tween.Completed:Connect(function() tweenVal:Destroy() end)
+        end
+    end
+end)
+
+LP.CharacterAdded:Connect(function(newChar)
+    if FlyModeEnabled then
+        IsResetting = true
+        local newHrp = newChar:WaitForChild("HumanoidRootPart", 5)
+        if newHrp then
+            task.spawn(function()
+                task.wait(0.5)
+                pcall(function() FlyYLevel = newHrp.Position.Y + 10 end)
+                IsResetting = false
+            end)
+        else
+            IsResetting = false
+        end
+    end
+end)
+
+-- ==========================================
+-- GOM QUÁI & AUTO FARM LOGIC
+-- ==========================================
+local attPlayer, attMonster, tracerBeam = Instance.new("Attachment"), Instance.new("Attachment"), Instance.new("Beam")
+tracerBeam.Width0, tracerBeam.Width1 = 0.2, 0.2
+tracerBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0))
+tracerBeam.FaceCamera = true
+tracerBeam.Attachment0, tracerBeam.Attachment1 = attPlayer, attMonster
+
+local function resetMonsters()
+    if tracerBeam then tracerBeam.Parent = nil end
+    for monster, data in pairs(originalData) do
+        if monster and monster.Parent and data.Root then
+            pcall(function()
+                data.Root.Size = data.Size
+                data.Root.Transparency = data.Transparency
+                data.Root.CanCollide = data.CanCollide
+                data.Root.CFrame = data.CFrame
+                monster:PivotTo(data.CFrame)
+            end)
+        end
+    end
+    table.clear(originalData)
+    table.clear(CurrentValidMonsters)
+end
+
+task.spawn(function()
+    while task.wait(0.1) do
+        if AutoplayEnabled then
+            pcall(function()
+                local myChar = LP.Character
+                local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                if not myRoot or IsResetting then
+                    if tracerBeam then tracerBeam.Parent = nil end
+                    return
+                end
+                
+                local currentTime = os.clock()
+                local validMonsters = {}
+                
+                for _, obj in pairs(workspace:GetDescendants()) do
+                    if obj:IsA("Model") and obj ~= myChar and isEnemyNPC(obj) then
+                        local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
+                        if root then
+                            if not monsterSpawnTimes[obj] then monsterSpawnTimes[obj] = currentTime end
+                            if (currentTime - monsterSpawnTimes[obj]) >= 0.5 then
+                                if not originalData[obj] then
+                                    originalData[obj] = {
+                                        Root = root,
+                                        CFrame = root.CFrame,
+                                        Size = root.Size,
+                                        Transparency = root.Transparency,
+                                        CanCollide = root.CanCollide
+                                    }
+                                end
+                                if (originalData[obj].CFrame.Position - myRoot.Position).Magnitude <= DetectRange then
+                                    table.insert(validMonsters, obj)
+                                end
+                            end
+                        end
+                    end
+                end
+                CurrentValidMonsters = validMonsters
+                
+                if #validMonsters > 0 and ActiveMode ~= 2 then 
+                    local effDist = (ForwardDistance == 0) and 1.5 or ForwardDistance
+                    local targetCFrame = myRoot.CFrame * CFrame.new(0, -2, -effDist)
+                    
+                    for _, monster in ipairs(validMonsters) do
+                        local root = monster:FindFirstChild("HumanoidRootPart") or monster:FindFirstChild("Head")
+                        if root then
+                            root.Size = HitboxSize
+                            root.Transparency = 1
+                            root.CanCollide = false
+                            if root:IsA("BasePart") then root.AssemblyLinearVelocity = Vector3.new(0,0,0) end
+                            monster:PivotTo(targetCFrame)
+                        end
+                    end
+                    local firstMonsterRoot = validMonsters[1]:FindFirstChild("HumanoidRootPart") or validMonsters[1]:FindFirstChild("Head")
+                    if firstMonsterRoot then
+                        attPlayer.Parent = myRoot
+                        attPlayer.Position = Vector3.new(0, 0, 0)
+                        attMonster.Parent = firstMonsterRoot
+                        attMonster.Position = Vector3.new(0, 0, 0)
+                        if tracerBeam then tracerBeam.Parent = myRoot end
+                    end
+                elseif ActiveMode == 2 then
+                    for _, monster in ipairs(validMonsters) do
+                        local data = originalData[monster]
+                        local root = monster:FindFirstChild("HumanoidRootPart") or monster:FindFirstChild("Head")
+                        if data and root then
+                            root.Size = data.Size
+                            root.Transparency = data.Transparency
+                            root.CanCollide = data.CanCollide
+                        end
+                    end
+                    if tracerBeam then tracerBeam.Parent = nil end
+                else
+                    if tracerBeam then tracerBeam.Parent = nil end
+                end
+                
+                for monster, _ in pairs(monsterSpawnTimes) do
+                    if not monster:IsDescendantOf(workspace) then
+                        monsterSpawnTimes[monster] = nil
+                        originalData[monster] = nil
+                    end
+                end
+            end)
+        else
+            if #CurrentValidMonsters > 0 or next(originalData) ~= nil then resetMonsters() end
+        end
+    end
+end)
+
+AutoplayBtn.MouseButton1Click:Connect(function()
+    AutoplayEnabled = not AutoplayEnabled
+    AutoplayBtn.BackgroundColor3 = AutoplayEnabled and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 40, 50)
+    AutoplayBtn.Text = AutoplayEnabled and "Autoplay: ON" or "Autoplay: OFF"
+    
+    if AutoplayEnabled then
+        UI.Notification("hamsterscript", "Hãy đảm bảo Unit của bạn đã được trang bị!", 3)
+        task.spawn(function()
+            while AutoplayEnabled do
+                local char = LP.Character
+                if char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 and not IsResetting then
+                    local myHrp = char:FindFirstChild("HumanoidRootPart")
+                    if ActiveMode == 1 then
+                        if (TARGET_POS - myHrp.Position).Magnitude >= 3 then
+                            local finalTarget = FlyModeEnabled and Vector3.new(TARGET_POS.X, FlyYLevel, TARGET_POS.Z) or TARGET_POS
+                            local t = TweenService:Create(myHrp, TweenInfo.new((finalTarget - myHrp.Position).Magnitude / 200, Enum.EasingStyle.Linear), {CFrame = CFrame.new(finalTarget)})
+                            t:Play()
+                            while t.PlaybackState == Enum.PlaybackState.Playing and AutoplayEnabled and not IsResetting do task.wait() end
+                        end
+                    elseif ActiveMode == 2 then
+                        if #CurrentValidMonsters > 0 then
+                            local targetMonster = CurrentValidMonsters[1]
+                            local mRoot = targetMonster:FindFirstChild("HumanoidRootPart") or targetMonster:FindFirstChild("Head")
+                            if mRoot and myHrp then
+                                if string.find(string.lower(targetMonster.Name), "boss") then
+                                    local bossTopPos = Vector3.new(mRoot.Position.X, FlyModeEnabled and FlyYLevel or (mRoot.Position.Y + 6), mRoot.Position.Z)
+                                    myHrp.CFrame = CFrame.lookAt(bossTopPos, Vector3.new(mRoot.Position.X, bossTopPos.Y, mRoot.Position.Z))
+                                else
+                                    if os.clock() - LastTriangleTick >= 0.5 then TriangleIndex = TriangleIndex % 3 + 1 LastTriangleTick = os.clock() end
+                                    local rad = math.rad((TriangleIndex - 1) * 120)
+                                    local finalRange = (ForwardDistance > 0) and (3 + ForwardDistance) or 3
+                                    local pointPos = mRoot.Position + Vector3.new(math.cos(rad) * finalRange, 0, math.sin(rad) * finalRange)
+                                    local finalPointPos = FlyModeEnabled and Vector3.new(pointPos.X, FlyYLevel, pointPos.Z) or pointPos
+                                    myHrp.CFrame = CFrame.lookAt(finalPointPos, Vector3.new(mRoot.Position.X, finalPointPos.Y, mRoot.Position.Z)) 
+                                end
+                            end
+                        else
+                            if myHrp then myHrp.CFrame = CFrame.new(FlyModeEnabled and Vector3.new(TARGET_POS.X, FlyYLevel, TARGET_POS.Z) or TARGET_POS) end
+                        end
+                    end
+                
+                    if AutoAttackEnabled and char:FindFirstChild("RemoteEvent") then
+                        if #CurrentValidMonsters > 0 then
+                            for _, monster in ipairs(CurrentValidMonsters) do
+                                local r = monster:FindFirstChild("HumanoidRootPart") or monster:FindFirstChild("Head")
+                                if r then char.RemoteEvent:FireServer(Enum.UserInputType.MouseButton1, r.Position, r.Position) end
+                            end
+                        else
+                            char.RemoteEvent:FireServer(Enum.UserInputType.MouseButton1, Vector3.new(-22, 3, -134), Vector3.new(-3, 10, 62))
+                        end
+                    end
+                    task.wait(AttackSpeed)
+                else
+                    LP.CharacterAdded:Wait()
+                    task.wait(1.5)
+                end
+            end
+        end)
+    else
+        resetMonsters()
+    end
+end)
+
+-- ==========================================
+-- ĐÓNG / MỞ MENU VÀ XÁC NHẬN KEY
+-- ==========================================
+local TB = Instance.new("ImageButton", SG)
+TB.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+TB.Position = UDim2.new(0.05, 0, 0.2, 0)
+TB.Size = UDim2.new(0, 48, 0, 48)
+TB.Image = "rbxassetid://101216188437066"
+TB.Visible = false
+TB.Active = true
+TB.Draggable = true
+UI.AddCorner(TB, 10)
+UI.AddStroke(TB, Color3.fromRGB(0, 170, 255), 1.5)
+
+local TW = false
+
+local function CloseKF()
+    local t = TweenService:Create(KF, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Size = UDim2.new(0,0,0,0), Position = UDim2.new(0.5,0,0.5,0)})
+    t:Play()
+    t.Completed:Connect(function() KF:Destroy() end)
+end
+
+KC.MouseButton1Click:Connect(CloseKF)
+GB.MouseButton1Click:Connect(function()
+    setclipboard(KEY_LINK)
+    GB.Text = "Đã Copy Link!"
+    task.wait(1.5)
+    GB.Text = "[ Bấm để Sao Chép Link Key ]"
+end)
+
+CB.MouseButton1Click:Connect(function()
+    if KI.Text == KEY_AUTH then
+        CB.BackgroundColor3 = Color3.fromRGB(40, 180, 90)
+        CB.Text = "XÁC NHẬN THÀNH CÔNG!"
+        task.wait(0.4)
+        CloseKF()
+        task.wait(0.4)
+        MM.Visible = true
+    else
+        CB.BackgroundColor3 = Color3.fromRGB(200, 40, 50)
+        CB.Text = "SAI KEY!"
+        task.wait(1)
+        CB.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+        CB.Text = "XÁC NHẬN"
+    end
+end)
+
+local function toggleMM(show)
+    if TW then return end
+    TW = true
+    if show then
+        TweenService:Create(TB, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Size = UDim2.new(0,0,0,0)}):Play()
+        task.wait(0.2)
+        TB.Visible = false
+        MM.Visible = true
+        local t = TweenService:Create(MM, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0,440,0,280), Position = UDim2.new(0.5,-220,0.5,-140)})
+        t:Play()
+        t.Completed:Connect(function() TW = false end)
+    else
+        local t = TweenService:Create(MM, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Size = UDim2.new(0,0,0,0), Position = UDim2.new(0.5,0,0.5,0)})
+        t:Play()
+        t.Completed:Connect(function()
+            MM.Visible = false
+            TB.Visible = true
+            local t2 = TweenService:Create(TB, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0,48,0,48)})
+            TB.Size = UDim2.new(0,0,0,0)
+            t2:Play()
+            t2.Completed:Connect(function() TW = false end)
+        end)
+    end
+end
+
+MC.MouseButton1Click:Connect(function() toggleMM(false) end)
+TB.MouseButton1Click:Connect(function() toggleMM(true) end)
+
+-- ==========================================
+-- BẮT GÓI TIN NAMECALL TỐI ƯU SIÊU TỐC
+-- ==========================================
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    
+    if method ~= "FireServer" then
+        return oldNamecall(self, ...)
+    end
+    
+    local args = table.pack(...)
+    local isMatchFound = false
+    local detectedUnit = nil
+    
+    for i = 1, args.n do
+        local arg = args[i]
+        if type(arg) == "string" and string.find(string.lower(arg), "changechar") then
+            isMatchFound = true
+        elseif typeof(arg) == "Instance" then
+            detectedUnit = arg
+        end
+    end
+    
+    if isMatchFound then
+        CapturedArgs = args      
+        CapturedRemote = self    
+        CapturedUnitName = detectedUnit and tostring(detectedUnit.Name) or "Unknown Unit"
+        
+        -- Thêm Unit vừa bắt vào danh sách History List
+        local newEntry = {
+            Name = CapturedUnitName,
+            Args = CapturedArgs,
+            Remote = CapturedRemote
+        }
+        
+        -- Lọc tránh trùng lặp
+        for i, v in ipairs(CapturedUnitsList) do
+            if v.Name == CapturedUnitName then
+                table.remove(CapturedUnitsList, i)
+                break
+            end
+        end
+        table.insert(CapturedUnitsList, 1, newEntry) -- Chèn vào vị trí đầu tiên (Mới nhất)
+        
+        task.spawn(function()
+            pcall(RefreshUnitListUI) -- Làm mới UI danh sách Unit
+            pcall(function()
+                if ResetSpawnBtn then
+                    ResetSpawnBtn.Text = "[" .. CapturedUnitName .. "]: Gọi Spawn 1 Lần"
+                    ResetSpawnBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+                    ResetSpawnBtn.TextColor3 = Color3.new(1, 1, 1)
+                end
+            end)
+        end)
+    end
+    
+    return oldNamecall(self, ...)
+end)
